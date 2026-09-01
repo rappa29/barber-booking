@@ -71,10 +71,18 @@ function CustomerPage() {
   const [selectedShop, setSelectedShop] = useState(null); 
   const [selectedBarberId, setSelectedBarberId] = useState(''); 
 
-  // Ticket & Review Modals
+  // ข้อมูลสถิติรีวิวช่าง
+  const [reviewsData, setReviewsData] = useState({});
+
+  // Ticket Modal
   const [showTicketModal, setShowTicketModal] = useState(false);
   const [ticketData, setTicketData] = useState(null);
+
+  // Payment & Review Modals
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [currentPayingBooking, setCurrentPayingBooking] = useState(null);
   const [showReviewModal, setShowReviewModal] = useState(false);
+  const [reviewTargetBarber, setReviewTargetBarber] = useState(null);
   const [rating, setRating] = useState(5);
   const [reviewComment, setReviewComment] = useState('');
 
@@ -96,6 +104,32 @@ function CustomerPage() {
     setAlertMessage(msg);
     setShowAlert(true);
   };
+
+  // ดึงข้อมูลคะแนนรีวิวทั้งหมดของช่าง
+  const fetchReviews = async () => {
+    const { data, error } = await supabase.from('barber_reviews').select('barber_id, rating');
+    if (!error && data) {
+      const summary = {};
+      data.forEach((r) => {
+        if (!summary[r.barber_id]) summary[r.barber_id] = { total: 0, count: 0 };
+        summary[r.barber_id].total += r.rating;
+        summary[r.barber_id].count += 1;
+      });
+
+      const result = {};
+      Object.keys(summary).forEach((id) => {
+        result[id] = {
+          avg: (summary[id].total / summary[id].count).toFixed(1),
+          count: summary[id].count
+        };
+      });
+      setReviewsData(result);
+    }
+  };
+
+  useEffect(() => {
+    fetchReviews();
+  }, []);
 
   useEffect(() => {
     const fetchShops = async () => {
@@ -132,6 +166,7 @@ function CustomerPage() {
     }
   }, [showAdminModal]);
 
+  // ตรวจจับสถานะการตัดผม: ถึงคิว / ตัดเสร็จแล้วให้เด้งชำระเงิน
   useEffect(() => {
     if (myPhone && bookings.length > 0) {
       const myTurn = bookings.find(b => b.phone === myPhone && b.status === 'in_progress');
@@ -140,9 +175,10 @@ function CustomerPage() {
       }
 
       const myCompletedBooking = bookings.find(b => b.phone === myPhone && b.status === 'completed');
-      if (myCompletedBooking && !localStorage.getItem(`reviewed_${myCompletedBooking.id}`)) {
-        setShowReviewModal(true);
-        localStorage.setItem(`reviewed_${myCompletedBooking.id}`, 'true');
+      if (myCompletedBooking && !localStorage.getItem(`paid_${myCompletedBooking.id}`)) {
+        setCurrentPayingBooking(myCompletedBooking);
+        setShowPaymentModal(true);
+        localStorage.setItem(`paid_${myCompletedBooking.id}`, 'true');
       }
     }
   }, [bookings, myPhone]);
@@ -214,14 +250,27 @@ function CustomerPage() {
     }
   };
 
+  // กดยืนยันชำระเงินสำเร็จ -> เปิดหน้าแบบประเมิน
+  const handlePaymentSuccess = () => {
+    setShowPaymentModal(false);
+    if (currentPayingBooking) {
+      const barberInfo = barbers.find(b => b.id === currentPayingBooking.barber_id);
+      setReviewTargetBarber(barberInfo || { id: currentPayingBooking.barber_id, name: 'ช่างประจำร้าน' });
+    }
+    setShowReviewModal(true);
+  };
+
+  // ส่งคะแนนประเมินลง Supabase
   const handleSubmitReview = async () => {
-    const myBooking = bookings.find(b => b.phone === myPhone);
-    if (myBooking && myBooking.barber_id) {
+    const targetId = reviewTargetBarber?.id || selectedBarberId;
+    if (targetId) {
       await supabase.from('barber_reviews').insert([
-        { barber_id: myBooking.barber_id, rating: rating, comment: reviewComment }
+        { barber_id: targetId, rating: rating, comment: reviewComment }
       ]);
+      fetchReviews();
     }
     setShowReviewModal(false);
+    setReviewComment('');
     triggerAlert("🌟 ขอบคุณสำหรับคะแนนประเมินการบริการครับ!");
   };
 
@@ -387,6 +436,7 @@ function CustomerPage() {
                   <div style={barberListStyle}>
                     {barbers.map(barber => {
                       const isSelected = selectedBarberId === barber.id;
+                      const ratingInfo = reviewsData[barber.id] || { avg: '5.0', count: 0 };
                       return (
                         <div 
                           key={barber.id} 
@@ -399,8 +449,16 @@ function CustomerPage() {
                         >
                           <img src={barber.avatar_url || 'https://via.placeholder.com/80'} alt={barber.name} style={avatarStyle} />
                           <div style={{ flex: 1 }}>
-                            <h4 style={{ margin: '0 0 5px 0', color: '#002d5a', fontSize: '15px' }}>ช่าง {barber.name} ({barber.nickname || 'ไม่มีชื่อเล่น'})</h4>
-                            <span style={{ fontSize: '12px', color: '#666' }}>เพศ: {barber.gender}</span>
+                            <h4 style={{ margin: '0 0 3px 0', color: '#002d5a', fontSize: '15px' }}>ช่าง {barber.name} ({barber.nickname || 'ไม่มีชื่อเล่น'})</h4>
+                            <div style={{ fontSize: '12px', color: '#666' }}>เพศ: {barber.gender}</div>
+                            
+                            {/* ⭐ แสดงคะแนนดาวรีวิวใต้ชื่อช่าง */}
+                            <div style={{ color: '#d97706', fontSize: '13px', fontWeight: 'bold', marginTop: '4px' }}>
+                              ★ {ratingInfo.avg} 
+                              <span style={{ color: '#888', fontWeight: 'normal', fontSize: '12px', marginLeft: '4px' }}>
+                                ({ratingInfo.count} รีวิว)
+                              </span>
+                            </div>
                           </div>
                           <div style={{ ...selectIndicator, backgroundColor: isSelected ? '#004a99' : '#fff', color: isSelected ? 'white' : '#ccc' }}>
                             {isSelected ? '✓ เลือกอยู่' : 'คลิกเลือก'}
@@ -428,7 +486,7 @@ function CustomerPage() {
                             return (
                               <div 
                                 key={srv.id} 
-                                onClick={() => toggleService(srv)}
+                                onClick={() => toggleService(srv)} 
                                 style={{
                                   padding: '8px 10px',
                                   borderRadius: '8px',
@@ -556,13 +614,53 @@ function CustomerPage() {
         </div>
       )}
 
-      {/* ⭐ Modal รีวิวช่าง */}
+      {/* 💳 Modal สแกน QR ชำระเงิน PromptPay (เด้งขึ้นมาก่อนหลังตัดผมเสร็จ) */}
+      {showPaymentModal && currentPayingBooking && (
+        <div style={modalOverlayStyle}>
+          <div style={{ ...modalContentStyle, maxWidth: '360px', padding: '30px 25px', textAlign: 'center' }}>
+            <div style={{ fontSize: '36px', marginBottom: '5px' }}>📱</div>
+            <h3 style={{ margin: '0 0 5px 0', color: '#002d5a', fontSize: '20px', fontWeight: 'bold' }}>ชำระเงินค่าบริการ</h3>
+            <p style={{ margin: '0 0 15px 0', fontSize: '13px', color: '#718096' }}>
+              บริการเสร็จสิ้นแล้ว กรุณาสแกน QR เพื่อชำระเงิน
+            </p>
+
+            <div style={{ background: '#f7fafc', padding: '15px', borderRadius: '12px', border: '1px solid #e2e8f0', marginBottom: '15px' }}>
+              <img 
+                src={`https://promptpay.io/0812345678/${currentPayingBooking.price || 1}.png`} 
+                alt="PromptPay QR" 
+                style={{ width: '180px', height: '180px', margin: '0 auto', display: 'block', borderRadius: '8px' }} 
+              />
+              <div style={{ marginTop: '10px', fontSize: '18px', fontWeight: 'bold', color: '#004a99' }}>
+                ยอดชำระ: {currentPayingBooking.price || 1} บาท
+              </div>
+              <div style={{ fontSize: '12px', color: '#a0aec0' }}>พร้อมเพย์ / สแกนจ่ายผ่านทุกธนาคาร</div>
+            </div>
+
+            <button 
+              onClick={handlePaymentSuccess} 
+              style={{ ...confirmButtonStyle, backgroundColor: '#10b981', width: '100%', margin: '0 0 8px 0' }}
+            >
+              ✅ สแกนจ่ายเงินเรียบร้อยแล้ว
+            </button>
+            <button 
+              onClick={() => setShowPaymentModal(false)} 
+              style={{ ...cancelButtonStyle, width: '100%', margin: 0 }}
+            >
+              ปิดหน้าต่าง
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ⭐ Modal ประเมินความพึงพอใจ (เด้งขึ้นมาหลังจ่ายเงินเสร็จ) */}
       {showReviewModal && (
         <div style={modalOverlayStyle}>
           <div style={{ ...modalContentStyle, maxWidth: '360px', padding: '30px 25px' }}>
             <div style={{ fontSize: '36px', marginBottom: '8px' }}>🎉</div>
             <h3 style={{ margin: '0 0 6px 0', color: '#002d5a', fontSize: '20px', fontWeight: 'bold' }}>ประเมินความพึงพอใจ</h3>
-            <p style={{ fontSize: '13px', color: '#718096', margin: '0 0 15px 0' }}>บริการตัดผมเสร็จสิ้นแล้ว ช่วยให้คะแนนความพึงพอใจหน่อยนะครับ</p>
+            <p style={{ fontSize: '13px', color: '#718096', margin: '0 0 15px 0' }}>
+              ช่าง: <strong>{reviewTargetBarber?.name || 'ช่างประจำร้าน'}</strong>
+            </p>
             
             <div style={{ display: 'flex', gap: '8px', fontSize: '32px', cursor: 'pointer', marginBottom: '15px' }}>
               {[1, 2, 3, 4, 5].map(star => (
