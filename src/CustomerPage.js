@@ -166,19 +166,21 @@ function CustomerPage() {
     }
   }, [showAdminModal]);
 
-  // ตรวจจับสถานะการตัดผม: ถึงคิว / ตัดเสร็จแล้วให้เด้งชำระเงิน
+  // --- 💈 ตรวจสอบสถานะคิวของลูกค้า ---
   useEffect(() => {
     if (myPhone && bookings.length > 0) {
+      // 1. แจ้งเตือนเมื่อถึงคิว
       const myTurn = bookings.find(b => b.phone === myPhone && b.status === 'in_progress');
       if (myTurn) {
         triggerAlert(`🔔 ถึงคิวคุณ ${myTurn.name} แล้วครับ! กรุณาเชิญที่เก้าอี้ตัดผมได้เลยครับ`);
       }
 
+      // 2. เมื่อช่างกด "เสร็จแล้ว" -> ให้เด้งหน้า QR สแกนจ่ายเงิน (ห้ามเปิด Review ทันที)
       const myCompletedBooking = bookings.find(b => b.phone === myPhone && b.status === 'completed');
       if (myCompletedBooking && !localStorage.getItem(`paid_${myCompletedBooking.id}`)) {
         setCurrentPayingBooking(myCompletedBooking);
-        setShowPaymentModal(true);
-        localStorage.setItem(`paid_${myCompletedBooking.id}`, 'true');
+        setShowPaymentModal(true); // ✅ เปิดหน้า QR จ่ายเงิน
+        setShowReviewModal(false); // ❌ ปิดหน้าประเมินไว้ก่อน
       }
     }
   }, [bookings, myPhone]);
@@ -250,14 +252,19 @@ function CustomerPage() {
     }
   };
 
-  // กดยืนยันชำระเงินสำเร็จ -> เปิดหน้าแบบประเมิน
+  // ✅ กดยืนยันชำระเงินสำเร็จ -> เปิดหน้าแบบประเมิน
   const handlePaymentSuccess = () => {
-    setShowPaymentModal(false);
+    setShowPaymentModal(false); // ปิดหน้าต่างสแกนจ่ายเงิน
+
     if (currentPayingBooking) {
+      // ล็อกคิวนี้ว่าจ่ายเงินแล้ว จะได้ไม่เด้ง QR ซ้ำ
+      localStorage.setItem(`paid_${currentPayingBooking.id}`, 'true');
+
+      // กำหนดช่างที่จะได้รับคะแนน แล้วเปิดหน้าประเมินทันที
       const barberInfo = barbers.find(b => b.id === currentPayingBooking.barber_id);
       setReviewTargetBarber(barberInfo || { id: currentPayingBooking.barber_id, name: 'ช่างประจำร้าน' });
+      setShowReviewModal(true);
     }
-    setShowReviewModal(true);
   };
 
   // ส่งคะแนนประเมินลง Supabase
