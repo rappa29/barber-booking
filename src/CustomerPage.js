@@ -50,7 +50,7 @@ const SERVICES_CATEGORIES = [
 ];
 
 function CustomerPage() {
-  // 💾 ดึงข้อมูลชื่อและเบอร์ที่เคยล็อกอิน/จองไว้ในเครื่อง
+  // 💾 ดึงข้อมูลชื่อและเบอร์ที่เคยบันทึกไว้ในเครื่อง
   const [name, setName] = useState(localStorage.getItem('barberCustomerName') || '');
   const [phone, setPhone] = useState(localStorage.getItem('barberPhone') || '');
   const [date, setDate] = useState('');
@@ -295,7 +295,6 @@ function CustomerPage() {
     ]);
 
     if (!error) {
-      // 💾 จดจำข้อมูลลูกค้าไว้ในเครื่องเพื่อไม่ต้องพิมพ์ซ้ำในรอบหน้า
       setMyPhone(phone);
       localStorage.setItem('barberPhone', phone); 
       localStorage.setItem('barberCustomerName', name);
@@ -313,7 +312,6 @@ function CustomerPage() {
       });
       setShowTicketModal(true);
 
-      // รีเซ็ตแค่วันเวลา เพื่อให้ชื่อกับเบอร์คงอยู่พร้อมจองคิวต่อไปได้ทันที
       setDate('');
     } else {
       triggerAlert(`❌ จองไม่สำเร็จ: ${error.message}`);
@@ -367,20 +365,42 @@ function CustomerPage() {
     }
   };
 
+  // ⏱️ คำนวณและแสดงสถานะคิวตลอดเวลา
   const calculateQueueWait = () => {
-    if (!myPhone) return null;
-    const myIndex = filteredBookings.findIndex(b => b.phone === myPhone);
-    if (myIndex === -1) return null;
+    const waitingBookings = filteredBookings.filter(b => b.status === 'waiting' || !b.status);
+    const inProgressBooking = filteredBookings.find(b => b.status === 'in_progress');
 
-    const myBooking = filteredBookings[myIndex];
-    if (myBooking.status === 'completed') return { text: 'บริการเสร็จสิ้นแล้ว ขอบคุณครับ ✨', isReady: false };
-    if (myBooking.status === 'in_progress') return { text: '💈 ถึงคิวคุณแล้ว! กำลังรับบริการ', isReady: true };
+    // 1. กรณีที่ล็อกอินเบอร์ไว้แล้ว (คำนวณคิวก่อนหน้าเฉพาะบุคคล)
+    if (myPhone) {
+      const myIndex = filteredBookings.findIndex(b => b.phone === myPhone);
+      if (myIndex !== -1) {
+        const myBooking = filteredBookings[myIndex];
+        if (myBooking.status === 'completed') {
+          return { text: '✨ บริการเสร็จสิ้นแล้ว ขอบคุณครับ', isReady: false };
+        }
+        if (myBooking.status === 'in_progress') {
+          return { text: '💈 ถึงคิวคุณแล้ว! กำลังรับบริการ', isReady: true };
+        }
 
-    const queuesAhead = filteredBookings.slice(0, myIndex).filter(b => b.status !== 'completed').length;
-    return {
-      text: queuesAhead === 0 ? '🔥 คิวถัดไปคือคุณ! กรุณาเตรียมตัว' : `มีคิวก่อนหน้า ${queuesAhead} คิว (~${queuesAhead * 35} นาที)`,
-      isReady: queuesAhead === 0
-    };
+        const queuesAhead = filteredBookings.slice(0, myIndex).filter(b => b.status !== 'completed').length;
+        return {
+          text: queuesAhead === 0 ? '🔥 คิวถัดไปคือคุณ! กรุณาเตรียมตัว' : `มีคิวก่อนหน้าคุณ ${queuesAhead} คิว (~${queuesAhead * 35} นาที)`,
+          isReady: queuesAhead === 0
+        };
+      }
+    }
+
+    // 2. กรณียังไม่ได้จอง/ไม่มีเบอร์ (แสดงสถานะคิวรวมของร้านในวันนั้น)
+    if (filteredBookings.length > 0) {
+      return {
+        text: inProgressBooking 
+          ? `💈 กำลังให้บริการ 1 คิว (รอคิวอีก ${waitingBookings.length} ท่าน ~${waitingBookings.length * 35} นาที)`
+          : `📋 วันนี้มีคิวรอตัดผมทั้งหมด ${waitingBookings.length} คิว (~${waitingBookings.length * 35} นาที)`,
+        isReady: false
+      };
+    }
+
+    return { text: '🟢 วันนี้ยังไม่มีคิวตัดผม สามารถจองเป็นคิวแรกได้เลยครับ', isReady: false };
   };
 
   const waitInfo = calculateQueueWait();
@@ -397,7 +417,7 @@ function CustomerPage() {
       <h1 style={logoStyle}>BARBER CLASSIC {isTeacherMode && <span style={{fontSize: '24px', color: '#cc0000'}}>(ADMIN)</span>}</h1>
       
       {!isTeacherMode && (
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px', marginBottom: '25px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px', marginBottom: '25px', width: '100%', maxWidth: '900px' }}>
           <div style={loginStatusStyle}>
             {myPhone ? (
               <span>🟢 ข้อมูลลูกค้า: <strong>{name ? `${name} (${myPhone})` : myPhone}</strong> 
@@ -416,7 +436,8 @@ function CustomerPage() {
               padding: '10px 22px',
               borderRadius: '25px',
               fontWeight: 'bold',
-              fontSize: '14px'
+              fontSize: '14px',
+              textAlign: 'center'
             }}>
               <span>⏱️ สถานะคิว:</span> {waitInfo.text}
             </div>
@@ -612,7 +633,6 @@ function CustomerPage() {
                     <Calendar onChange={setSelectedDate} value={selectedDate} />
                   </div>
 
-                  {/* ช่องกรอกชื่อและเบอร์โทร (จำค่าอัตโนมัติ) */}
                   <input 
                     placeholder="ชื่อลูกค้า" 
                     value={name} 
