@@ -109,6 +109,19 @@ function CustomerPage() {
     setShowAlert(true);
   };
 
+  // 📅 ฟังก์ชันสกัดสตริง YYYY-MM-DD แบบแม่นยำ ป้องกัน Timezone เลื่อนวัน
+  const formatLocalDate = (d) => {
+    if (!d) return '';
+    if (typeof d === 'string' && d.includes('-')) {
+      return d.substring(0, 10);
+    }
+    const dateObj = new Date(d);
+    const year = dateObj.getFullYear();
+    const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+    const day = String(dateObj.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
   // 📅 ดึงข้อมูลจำนวนคิวทั้งหมดเพื่อไปแสดงวงกลมสีแดงบนปฏิทิน
   const fetchAllCalendarBookings = async () => {
     let query = supabase.from('bookings').select('booking_date, status, shop_id, barber_id');
@@ -125,8 +138,7 @@ function CustomerPage() {
       const counts = {};
       data.forEach((b) => {
         if (b.booking_date) {
-          // แปลงวันที่ให้อยู่ในฟอร์แมต YYYY-MM-DD
-          const dStr = new Date(b.booking_date).toISOString().split('T')[0];
+          const dStr = formatLocalDate(b.booking_date);
           counts[dStr] = (counts[dStr] || 0) + 1;
         }
       });
@@ -396,7 +408,6 @@ function CustomerPage() {
     }
   };
 
-  // คำนวณและแสดงสถานะคิว
   const calculateQueueWait = () => {
     const waitingBookings = filteredBookings.filter(b => b.status === 'waiting' || !b.status);
     const inProgressBooking = filteredBookings.find(b => b.status === 'in_progress');
@@ -435,7 +446,7 @@ function CustomerPage() {
   // 🔴 ฟังก์ชันวาดวงกลมสีแดงแสดงจำนวนคิวลงบนช่องวันในปฏิทิน
   const renderCalendarTileContent = ({ date: tileDate, view }) => {
     if (view === 'month') {
-      const dStr = tileDate.toISOString().split('T')[0];
+      const dStr = formatLocalDate(tileDate);
       const count = allBookingsCount[dStr];
       if (count && count > 0) {
         return (
@@ -704,7 +715,7 @@ function CustomerPage() {
                     <Calendar 
                       onChange={setSelectedDate} 
                       value={selectedDate} 
-                      tileContent={renderCalendarTileContent} // 🔴 วาดวงกลมสีแดงในหน้าลูกค้า
+                      tileContent={renderCalendarTileContent}
                     />
                   </div>
 
