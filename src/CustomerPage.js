@@ -5,7 +5,7 @@ import html2canvas from 'html2canvas';
 import { supabase } from './supabaseClient';
 import { useBookings } from './useBookings';
 
-// ✂️ รายการทรงผมและบริการแบบแยกเดี่ยว 100% ตามร้านตัดผมในไทย
+// ✂️ รายการทรงผมและบริการ
 const SERVICES_CATEGORIES = [
   {
     category: '✂️ 1. หมวดทรงผม (เลือกทรงผมหลัก)',
@@ -50,32 +50,31 @@ const SERVICES_CATEGORIES = [
 ];
 
 function CustomerPage() {
-  const [name, setName] = useState('');
-  const [phone, setPhone] = useState('');
+  // 💾 ดึงข้อมูลชื่อและเบอร์ที่เคยล็อกอิน/จองไว้ในเครื่อง
+  const [name, setName] = useState(localStorage.getItem('barberCustomerName') || '');
+  const [phone, setPhone] = useState(localStorage.getItem('barberPhone') || '');
   const [date, setDate] = useState('');
   const [selectedDate, setSelectedDate] = useState(new Date());
   
-  // 💈 เลือกบริการหลายรายการ
   const [selectedServices, setSelectedServices] = useState([SERVICES_CATEGORIES[0].items[0]]);
-
-  // ระบบ Login จากเบอร์
   const [myPhone, setMyPhone] = useState(localStorage.getItem('barberPhone') || '');
 
-  // ระบบ Admin Modal
   const [isTeacherMode, setIsTeacherMode] = useState(false);
   const [showAdminModal, setShowAdminModal] = useState(false);
   const [password, setPassword] = useState('');
 
-  // สเตตร้านและช่าง
   const [shops, setShops] = useState([]);
   const [barbers, setBarbers] = useState([]);
   const [selectedShop, setSelectedShop] = useState(null); 
   const [selectedBarberId, setSelectedBarberId] = useState(''); 
 
-  // ข้อมูลสถิติรีวิวช่าง
+  // ข้อมูลสถิติและรายการรีวิวช่าง
   const [reviewsData, setReviewsData] = useState({});
+  const [rawReviews, setRawReviews] = useState([]);
+  const [showCommentsModal, setShowCommentsModal] = useState(false);
+  const [viewingBarber, setViewingBarber] = useState(null);
 
-  // Ticket Modal & Ref สำหรับบันทึกรูป
+  // Ticket Modal & Ref บันทึกรูป
   const [showTicketModal, setShowTicketModal] = useState(false);
   const [ticketData, setTicketData] = useState(null);
   const ticketRef = useRef(null);
@@ -108,10 +107,25 @@ function CustomerPage() {
     setShowAlert(true);
   };
 
-  // ดึงข้อมูลคะแนนรีวิวทั้งหมดของช่าง
+  // ล้างข้อมูลเพื่อเปลี่ยนบัญชี/ผู้ใช้
+  const handleLogoutCustomer = () => {
+    localStorage.removeItem('barberPhone');
+    localStorage.removeItem('barberCustomerName');
+    setMyPhone('');
+    setName('');
+    setPhone('');
+    triggerAlert('👋 ออกจากระบบเรียบร้อยแล้ว คุณสามารถกรอกข้อมูลลูกค้าคนใหม่ได้ครับ');
+  };
+
   const fetchReviews = async () => {
-    const { data, error } = await supabase.from('barber_reviews').select('barber_id, rating');
+    const { data, error } = await supabase
+      .from('barber_reviews')
+      .select('*')
+      .order('created_at', { ascending: false });
+
     if (!error && data) {
+      setRawReviews(data);
+
       const summary = {};
       data.forEach((r) => {
         if (!summary[r.barber_id]) summary[r.barber_id] = { total: 0, count: 0 };
@@ -169,7 +183,6 @@ function CustomerPage() {
     }
   }, [showAdminModal]);
 
-  // --- 💈 ตรวจสอบสถานะคิวของลูกค้า ---
   useEffect(() => {
     if (myPhone && bookings.length > 0) {
       const myTurn = bookings.find(b => b.phone === myPhone && b.status === 'in_progress');
@@ -177,7 +190,6 @@ function CustomerPage() {
         triggerAlert(`🔔 ถึงคิวคุณ ${myTurn.name} แล้วครับ! กรุณาเชิญที่เก้าอี้ตัดผมได้เลยครับ`);
       }
 
-      // เมื่อช่างกดเสร็จแล้ว -> เด้งหน้าชำระเงิน QR
       const myCompletedBooking = bookings.find(b => b.phone === myPhone && b.status === 'completed');
       if (myCompletedBooking && !localStorage.getItem(`paid_${myCompletedBooking.id}`)) {
         setCurrentPayingBooking(myCompletedBooking);
@@ -187,19 +199,23 @@ function CustomerPage() {
     }
   }, [bookings, myPhone]);
 
-  // ฟังก์ชันบันทึกรูปลงคลังภาพมือถือ / ดาวน์โหลดลงคอม
+  const handleOpenComments = (e, barber) => {
+    e.stopPropagation();
+    setViewingBarber(barber);
+    setShowCommentsModal(true);
+  };
+
   const handleSaveTicketImage = async () => {
     if (!ticketRef.current) return;
     setIsSavingImage(true);
 
     try {
       const canvas = await html2canvas(ticketRef.current, {
-        scale: 3, // ความละเอียดสูง คมชัด
+        scale: 3,
         backgroundColor: '#ffffff',
         useCORS: true
       });
 
-      // ตรวจสอบว่าเป็นสมาร์ตโฟนที่รองรับการแชร์/บันทึกลงคลังรูปภาพ
       if (navigator.share && navigator.canShare) {
         canvas.toBlob(async (blob) => {
           if (!blob) {
@@ -216,14 +232,11 @@ function CustomerPage() {
               });
               setIsSavingImage(false);
               return;
-            } catch (err) {
-              // หากกดยกเลิกการแชร์ ให้ข้ามไปดาวน์โหลดปกติ
-            }
+            } catch (err) {}
           }
         });
       }
 
-      // สำหรับคอมพิวเตอร์ หรือเบราว์เซอร์ที่ไม่รองรับ Web Share API
       const imageURL = canvas.toDataURL('image/png');
       const link = document.createElement('a');
       link.href = imageURL;
@@ -282,10 +295,11 @@ function CustomerPage() {
     ]);
 
     if (!error) {
+      // 💾 จดจำข้อมูลลูกค้าไว้ในเครื่องเพื่อไม่ต้องพิมพ์ซ้ำในรอบหน้า
       setMyPhone(phone);
       localStorage.setItem('barberPhone', phone); 
+      localStorage.setItem('barberCustomerName', name);
 
-      // ล็อกให้แสดงผลเฉพาะบัตรคิวใบเดียวของลูกค้าท่านนี้
       setTicketData({
         queueNo: filteredBookings.length + 1,
         customerName: name,
@@ -299,7 +313,8 @@ function CustomerPage() {
       });
       setShowTicketModal(true);
 
-      setName(''); setPhone(''); setDate('');
+      // รีเซ็ตแค่วันเวลา เพื่อให้ชื่อกับเบอร์คงอยู่พร้อมจองคิวต่อไปได้ทันที
+      setDate('');
     } else {
       triggerAlert(`❌ จองไม่สำเร็จ: ${error.message}`);
     }
@@ -369,6 +384,7 @@ function CustomerPage() {
   };
 
   const waitInfo = calculateQueueWait();
+  const barberReviewsList = viewingBarber ? rawReviews.filter(r => r.barber_id === viewingBarber.id) : [];
 
   return (
     <div style={containerStyle}>
@@ -384,11 +400,11 @@ function CustomerPage() {
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px', marginBottom: '25px' }}>
           <div style={loginStatusStyle}>
             {myPhone ? (
-              <span>🟢 กำลังติดตามคิวเบอร์: <strong>{myPhone}</strong> 
-                <button onClick={() => {localStorage.removeItem('barberPhone'); setMyPhone('');}} style={changeBtn}> (ออกจากระบบ)</button>
+              <span>🟢 ข้อมูลลูกค้า: <strong>{name ? `${name} (${myPhone})` : myPhone}</strong> 
+                <button onClick={handleLogoutCustomer} style={changeBtn}> (เปลี่ยนข้อมูล / ออกจากระบบ)</button>
               </span>
             ) : (
-              <span style={{color: '#666'}}>🚩 กรุณาเลือกสาขาและจองคิวเพื่อเข้าสู่ระบบแจ้งเตือน</span>
+              <span style={{color: '#666'}}>🚩 กรุณาเลือกสาขาและจองคิวเพื่อบันทึกข้อมูลและเข้าสู่ระบบแจ้งเตือน</span>
             )}
           </div>
 
@@ -505,11 +521,26 @@ function CustomerPage() {
                           <div style={{ flex: 1 }}>
                             <h4 style={{ margin: '0 0 3px 0', color: '#002d5a', fontSize: '15px' }}>ช่าง {barber.name} ({barber.nickname || 'ไม่มีชื่อเล่น'})</h4>
                             <div style={{ fontSize: '12px', color: '#666' }}>เพศ: {barber.gender}</div>
-                            <div style={{ color: '#d97706', fontSize: '13px', fontWeight: 'bold', marginTop: '4px' }}>
-                              ★ {ratingInfo.avg} 
-                              <span style={{ color: '#888', fontWeight: 'normal', fontSize: '12px', marginLeft: '4px' }}>
-                                ({ratingInfo.count} รีวิว)
+                            
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '6px' }}>
+                              <span style={{ color: '#d97706', fontSize: '13px', fontWeight: 'bold' }}>
+                                ★ {ratingInfo.avg}
                               </span>
+                              <button
+                                onClick={(e) => handleOpenComments(e, barber)}
+                                style={{
+                                  background: '#edf2f7',
+                                  border: '1px solid #cbd5e0',
+                                  color: '#2b6cb0',
+                                  fontSize: '11px',
+                                  padding: '2px 8px',
+                                  borderRadius: '12px',
+                                  cursor: 'pointer',
+                                  fontWeight: 'bold'
+                                }}
+                              >
+                                💬 ดูรีวิว ({ratingInfo.count})
+                              </button>
                             </div>
                           </div>
                           <div style={{ ...selectIndicator, backgroundColor: isSelected ? '#004a99' : '#fff', color: isSelected ? 'white' : '#ccc' }}>
@@ -581,9 +612,25 @@ function CustomerPage() {
                     <Calendar onChange={setSelectedDate} value={selectedDate} />
                   </div>
 
-                  <input placeholder="ชื่อลูกค้า" value={name} onChange={e => setName(e.target.value)} style={inputStyle} />
-                  <input placeholder="เบอร์โทรศัพท์ (สำหรับแจ้งเตือน)" value={phone} onChange={e => setPhone(e.target.value)} style={{...inputStyle, marginTop: '10px'}} />
-                  <input type="datetime-local" value={date} onChange={e => setDate(e.target.value)} style={{...inputStyle, marginTop: '10px'}} />
+                  {/* ช่องกรอกชื่อและเบอร์โทร (จำค่าอัตโนมัติ) */}
+                  <input 
+                    placeholder="ชื่อลูกค้า" 
+                    value={name} 
+                    onChange={e => setName(e.target.value)} 
+                    style={inputStyle} 
+                  />
+                  <input 
+                    placeholder="เบอร์โทรศัพท์ (สำหรับแจ้งเตือน)" 
+                    value={phone} 
+                    onChange={e => setPhone(e.target.value)} 
+                    style={{...inputStyle, marginTop: '10px'}} 
+                  />
+                  <input 
+                    type="datetime-local" 
+                    value={date} 
+                    onChange={e => setDate(e.target.value)} 
+                    style={{...inputStyle, marginTop: '10px'}} 
+                  />
                   
                   <button onClick={handleBooking} style={buttonStyle}>
                     ยืนยันการจองคิว ({totalPrice} ฿)
@@ -632,12 +679,58 @@ function CustomerPage() {
         </div>
       )}
 
-      {/* 🎟️ Modal บัตรคิว Ticket (แสดงเพียง 1 ใบพร้อมบันทึกลงอัลบั้มภาพ) */}
+      {/* 💬 Modal แสดงรายการรีวิวและคอมเมนต์ */}
+      {showCommentsModal && viewingBarber && (
+        <div style={modalOverlayStyle}>
+          <div style={{ ...modalContentStyle, maxWidth: '420px', padding: '25px', textAlign: 'left' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '15px' }}>
+              <img src={viewingBarber.avatar_url || 'https://via.placeholder.com/80'} alt={viewingBarber.name} style={{ width: '50px', height: '50px', borderRadius: '50%', objectFit: 'cover' }} />
+              <div>
+                <h3 style={{ margin: 0, color: '#002d5a', fontSize: '18px' }}>ช่าง {viewingBarber.name}</h3>
+                <span style={{ color: '#d97706', fontSize: '13px', fontWeight: 'bold' }}>
+                  ★ {reviewsData[viewingBarber.id]?.avg || '5.0'} / 5.0 ({barberReviewsList.length} รีวิว)
+                </span>
+              </div>
+            </div>
+
+            <div style={{ maxHeight: '320px', overflowY: 'auto', marginBottom: '15px', paddingRight: '5px' }}>
+              {barberReviewsList.length === 0 ? (
+                <div style={{ textAlign: 'center', color: '#a0aec0', padding: '25px 0', fontSize: '14px' }}>
+                  ช่างท่านนี้ยังไม่มีรีวิวข้อความครับ
+                </div>
+              ) : (
+                barberReviewsList.map((rev) => (
+                  <div key={rev.id} style={{ background: '#f7fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '12px', marginBottom: '10px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                      <span style={{ color: '#ecc94b', fontSize: '14px' }}>
+                        {'★'.repeat(rev.rating)}{'☆'.repeat(5 - rev.rating)}
+                      </span>
+                      <span style={{ fontSize: '11px', color: '#a0aec0' }}>
+                        {new Date(rev.created_at).toLocaleDateString('th-TH')}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: '13px', color: '#2d3748', lineHeight: '1.5' }}>
+                      {rev.comment || '(ให้คะแนนบริการ)'}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <button
+              onClick={() => setShowCommentsModal(false)}
+              style={{ ...confirmButtonStyle, margin: 0, width: '100%', backgroundColor: '#004a99' }}
+            >
+              ปิด
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 🎟️ Modal บัตรคิว Ticket */}
       {showTicketModal && ticketData && (
         <div style={modalOverlayStyle}>
           <div style={{ ...modalContentStyle, maxWidth: '360px', background: '#fff', borderTop: '8px solid #004a99', padding: '25px' }}>
-            
-            {/* กล่องเนื้อหาบัตรคิวเฉพาะส่วนที่จะแปลงเป็นรูปภาพ */}
             <div ref={ticketRef} style={{ width: '100%', background: '#fff', padding: '15px', borderRadius: '12px', textAlign: 'center' }}>
               <div style={{ fontSize: '32px', marginBottom: '5px' }}>💈</div>
               <h2 style={{ margin: '0 0 2px 0', color: '#002d5a', fontSize: '20px' }}>BARBER CLASSIC</h2>
@@ -662,7 +755,6 @@ function CustomerPage() {
 
             <hr style={{ width: '100%', borderTop: '1px dashed #cbd5e0', margin: '15px 0' }} />
             
-            {/* ปุ่มบันทึกลงคลังภาพ / ดาวน์โหลด */}
             <button 
               onClick={handleSaveTicketImage} 
               disabled={isSavingImage}
