@@ -50,7 +50,6 @@ const SERVICES_CATEGORIES = [
 ];
 
 function CustomerPage() {
-  // 💾 ดึงข้อมูลชื่อและเบอร์ที่เคยบันทึกไว้ในเครื่อง
   const [name, setName] = useState(localStorage.getItem('barberCustomerName') || '');
   const [phone, setPhone] = useState(localStorage.getItem('barberPhone') || '');
   const [date, setDate] = useState('');
@@ -67,6 +66,9 @@ function CustomerPage() {
   const [barbers, setBarbers] = useState([]);
   const [selectedShop, setSelectedShop] = useState(null); 
   const [selectedBarberId, setSelectedBarberId] = useState(''); 
+
+  // ข้อมูลสถิติคิวบนปฏิทิน
+  const [allBookingsCount, setAllBookingsCount] = useState({});
 
   // ข้อมูลสถิติและรายการรีวิวช่าง
   const [reviewsData, setReviewsData] = useState({});
@@ -107,7 +109,35 @@ function CustomerPage() {
     setShowAlert(true);
   };
 
-  // ล้างข้อมูลเพื่อเปลี่ยนบัญชี/ผู้ใช้
+  // 📅 ดึงข้อมูลจำนวนคิวทั้งหมดเพื่อไปแสดงวงกลมสีแดงบนปฏิทิน
+  const fetchAllCalendarBookings = async () => {
+    let query = supabase.from('bookings').select('booking_date, status, shop_id, barber_id');
+    
+    if (selectedShop) {
+      query = query.eq('shop_id', selectedShop.id);
+    }
+    if (selectedBarberId) {
+      query = query.eq('barber_id', selectedBarberId);
+    }
+
+    const { data, error } = await query;
+    if (!error && data) {
+      const counts = {};
+      data.forEach((b) => {
+        if (b.booking_date) {
+          // แปลงวันที่ให้อยู่ในฟอร์แมต YYYY-MM-DD
+          const dStr = new Date(b.booking_date).toISOString().split('T')[0];
+          counts[dStr] = (counts[dStr] || 0) + 1;
+        }
+      });
+      setAllBookingsCount(counts);
+    }
+  };
+
+  useEffect(() => {
+    fetchAllCalendarBookings();
+  }, [selectedShop, selectedBarberId, bookings]);
+
   const handleLogoutCustomer = () => {
     localStorage.removeItem('barberPhone');
     localStorage.removeItem('barberCustomerName');
@@ -313,6 +343,7 @@ function CustomerPage() {
       setShowTicketModal(true);
 
       setDate('');
+      fetchAllCalendarBookings();
     } else {
       triggerAlert(`❌ จองไม่สำเร็จ: ${error.message}`);
     }
@@ -365,12 +396,11 @@ function CustomerPage() {
     }
   };
 
-  // ⏱️ คำนวณและแสดงสถานะคิวตลอดเวลา
+  // คำนวณและแสดงสถานะคิว
   const calculateQueueWait = () => {
     const waitingBookings = filteredBookings.filter(b => b.status === 'waiting' || !b.status);
     const inProgressBooking = filteredBookings.find(b => b.status === 'in_progress');
 
-    // 1. กรณีที่ล็อกอินเบอร์ไว้แล้ว (คำนวณคิวก่อนหน้าเฉพาะบุคคล)
     if (myPhone) {
       const myIndex = filteredBookings.findIndex(b => b.phone === myPhone);
       if (myIndex !== -1) {
@@ -390,7 +420,6 @@ function CustomerPage() {
       }
     }
 
-    // 2. กรณียังไม่ได้จอง/ไม่มีเบอร์ (แสดงสถานะคิวรวมของร้านในวันนั้น)
     if (filteredBookings.length > 0) {
       return {
         text: inProgressBooking 
@@ -401,6 +430,44 @@ function CustomerPage() {
     }
 
     return { text: '🟢 วันนี้ยังไม่มีคิวตัดผม สามารถจองเป็นคิวแรกได้เลยครับ', isReady: false };
+  };
+
+  // 🔴 ฟังก์ชันวาดวงกลมสีแดงแสดงจำนวนคิวลงบนช่องวันในปฏิทิน
+  const renderCalendarTileContent = ({ date: tileDate, view }) => {
+    if (view === 'month') {
+      const dStr = tileDate.toISOString().split('T')[0];
+      const count = allBookingsCount[dStr];
+      if (count && count > 0) {
+        return (
+          <div style={{
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+            marginTop: '2px'
+          }}>
+            <div style={{
+              backgroundColor: '#e53e3e',
+              color: 'white',
+              borderRadius: '50%',
+              width: '28px',
+              height: '28px',
+              fontSize: '10px',
+              fontWeight: 'bold',
+              display: 'flex',
+              flexDirection: 'column',
+              justifyContent: 'center',
+              alignItems: 'center',
+              lineHeight: '1.1',
+              boxShadow: '0 2px 4px rgba(229,62,62,0.4)'
+            }}>
+              <span>{count}</span>
+              <span style={{ fontSize: '8px' }}>คิว</span>
+            </div>
+          </div>
+        );
+      }
+    }
+    return null;
   };
 
   const waitInfo = calculateQueueWait();
@@ -451,7 +518,11 @@ function CustomerPage() {
           <div style={mainLayout}>
             <div style={sectionStyle}>
               <h3 style={sectionTitle}>📅 จัดการคิวรายวัน</h3>
-              <Calendar onChange={setSelectedDate} value={selectedDate} />
+              <Calendar 
+                onChange={setSelectedDate} 
+                value={selectedDate} 
+                tileContent={renderCalendarTileContent}
+              />
             </div>
           </div>
           
@@ -630,7 +701,11 @@ function CustomerPage() {
 
                   <h3 style={{ ...sectionTitle, marginTop: '5px' }}>📅 3. วันเวลาและข้อมูลลูกค้า</h3>
                   <div style={{ marginBottom: '15px' }}>
-                    <Calendar onChange={setSelectedDate} value={selectedDate} />
+                    <Calendar 
+                      onChange={setSelectedDate} 
+                      value={selectedDate} 
+                      tileContent={renderCalendarTileContent} // 🔴 วาดวงกลมสีแดงในหน้าลูกค้า
+                    />
                   </div>
 
                   <input 
