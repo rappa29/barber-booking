@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Calendar from 'react-calendar';
 import 'react-calendar/dist/Calendar.css';
+import html2canvas from 'html2canvas';
 import { supabase } from './supabaseClient';
 import { useBookings } from './useBookings';
 
@@ -74,9 +75,11 @@ function CustomerPage() {
   // ข้อมูลสถิติรีวิวช่าง
   const [reviewsData, setReviewsData] = useState({});
 
-  // Ticket Modal
+  // Ticket Modal & Ref สำหรับบันทึกรูป
   const [showTicketModal, setShowTicketModal] = useState(false);
   const [ticketData, setTicketData] = useState(null);
+  const ticketRef = useRef(null);
+  const [isSavingImage, setIsSavingImage] = useState(false);
 
   // Payment & Review Modals
   const [showPaymentModal, setShowPaymentModal] = useState(false);
@@ -169,23 +172,72 @@ function CustomerPage() {
   // --- 💈 ตรวจสอบสถานะคิวของลูกค้า ---
   useEffect(() => {
     if (myPhone && bookings.length > 0) {
-      // 1. แจ้งเตือนเมื่อถึงคิว
       const myTurn = bookings.find(b => b.phone === myPhone && b.status === 'in_progress');
       if (myTurn) {
         triggerAlert(`🔔 ถึงคิวคุณ ${myTurn.name} แล้วครับ! กรุณาเชิญที่เก้าอี้ตัดผมได้เลยครับ`);
       }
 
-      // 2. เมื่อช่างกด "เสร็จแล้ว" -> ให้เด้งหน้า QR สแกนจ่ายเงิน (ห้ามเปิด Review ทันที)
+      // เมื่อช่างกดเสร็จแล้ว -> เด้งหน้าชำระเงิน QR
       const myCompletedBooking = bookings.find(b => b.phone === myPhone && b.status === 'completed');
       if (myCompletedBooking && !localStorage.getItem(`paid_${myCompletedBooking.id}`)) {
         setCurrentPayingBooking(myCompletedBooking);
-        setShowPaymentModal(true); // ✅ เปิดหน้า QR จ่ายเงิน
-        setShowReviewModal(false); // ❌ ปิดหน้าประเมินไว้ก่อน
+        setShowPaymentModal(true);
+        setShowReviewModal(false);
       }
     }
   }, [bookings, myPhone]);
 
-  // ฟังก์ชันเลือก / ยกเลิกบริการ
+  // ฟังก์ชันบันทึกรูปลงคลังภาพมือถือ / ดาวน์โหลดลงคอม
+  const handleSaveTicketImage = async () => {
+    if (!ticketRef.current) return;
+    setIsSavingImage(true);
+
+    try {
+      const canvas = await html2canvas(ticketRef.current, {
+        scale: 3, // ความละเอียดสูง คมชัด
+        backgroundColor: '#ffffff',
+        useCORS: true
+      });
+
+      // ตรวจสอบว่าเป็นสมาร์ตโฟนที่รองรับการแชร์/บันทึกลงคลังรูปภาพ
+      if (navigator.share && navigator.canShare) {
+        canvas.toBlob(async (blob) => {
+          if (!blob) {
+            setIsSavingImage(false);
+            return;
+          }
+          const file = new File([blob], `Queue-${ticketData.queueNo}.png`, { type: 'image/png' });
+          if (navigator.canShare({ files: [file] })) {
+            try {
+              await navigator.share({
+                files: [file],
+                title: `บัตรคิว #${ticketData.queueNo}`,
+                text: `บัตรคิวร้าน Barber Classic ลำดับที่ ${ticketData.queueNo}`
+              });
+              setIsSavingImage(false);
+              return;
+            } catch (err) {
+              // หากกดยกเลิกการแชร์ ให้ข้ามไปดาวน์โหลดปกติ
+            }
+          }
+        });
+      }
+
+      // สำหรับคอมพิวเตอร์ หรือเบราว์เซอร์ที่ไม่รองรับ Web Share API
+      const imageURL = canvas.toDataURL('image/png');
+      const link = document.createElement('a');
+      link.href = imageURL;
+      link.download = `BarberClassic-Queue-${ticketData.queueNo}.png`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (error) {
+      triggerAlert('❌ ไม่สามารถบันทึกรูปภาพได้ กรุณาลองแคปหน้าจอแทนครับ');
+    } finally {
+      setIsSavingImage(false);
+    }
+  };
+
   const toggleService = (srv) => {
     const exists = selectedServices.some(item => item.id === srv.id);
     if (exists) {
@@ -233,6 +285,7 @@ function CustomerPage() {
       setMyPhone(phone);
       localStorage.setItem('barberPhone', phone); 
 
+      // ล็อกให้แสดงผลเฉพาะบัตรคิวใบเดียวของลูกค้าท่านนี้
       setTicketData({
         queueNo: filteredBookings.length + 1,
         customerName: name,
@@ -252,22 +305,16 @@ function CustomerPage() {
     }
   };
 
-  // ✅ กดยืนยันชำระเงินสำเร็จ -> เปิดหน้าแบบประเมิน
   const handlePaymentSuccess = () => {
-    setShowPaymentModal(false); // ปิดหน้าต่างสแกนจ่ายเงิน
-
+    setShowPaymentModal(false);
     if (currentPayingBooking) {
-      // ล็อกคิวนี้ว่าจ่ายเงินแล้ว จะได้ไม่เด้ง QR ซ้ำ
       localStorage.setItem(`paid_${currentPayingBooking.id}`, 'true');
-
-      // กำหนดช่างที่จะได้รับคะแนน แล้วเปิดหน้าประเมินทันที
       const barberInfo = barbers.find(b => b.id === currentPayingBooking.barber_id);
       setReviewTargetBarber(barberInfo || { id: currentPayingBooking.barber_id, name: 'ช่างประจำร้าน' });
       setShowReviewModal(true);
     }
   };
 
-  // ส่งคะแนนประเมินลง Supabase
   const handleSubmitReview = async () => {
     const targetId = reviewTargetBarber?.id || selectedBarberId;
     if (targetId) {
@@ -458,8 +505,6 @@ function CustomerPage() {
                           <div style={{ flex: 1 }}>
                             <h4 style={{ margin: '0 0 3px 0', color: '#002d5a', fontSize: '15px' }}>ช่าง {barber.name} ({barber.nickname || 'ไม่มีชื่อเล่น'})</h4>
                             <div style={{ fontSize: '12px', color: '#666' }}>เพศ: {barber.gender}</div>
-                            
-                            {/* ⭐ แสดงคะแนนดาวรีวิวใต้ชื่อช่าง */}
                             <div style={{ color: '#d97706', fontSize: '13px', fontWeight: 'bold', marginTop: '4px' }}>
                               ★ {ratingInfo.avg} 
                               <span style={{ color: '#888', fontWeight: 'normal', fontSize: '12px', marginLeft: '4px' }}>
@@ -476,11 +521,10 @@ function CustomerPage() {
                   </div>
                 </div>
 
-                {/* 2. ฟอร์มเลือกบริการแยกหมวดหมู่ + จอง */}
+                {/* 2. ฟอร์มเลือกบริการ */}
                 <div style={{ ...sectionStyle, flex: 1.6 }}>
-                  <h3 style={sectionTitle}>✂️ 2. เลือกทรงผมและบริการเสริม (เลือกได้หลายอย่าง)</h3>
+                  <h3 style={sectionTitle}>✂️ 2. เลือกทรงผมและบริการเสริม</h3>
                   
-                  {/* กล่องแสดงหมวดหมู่บริการ */}
                   <div style={{ maxHeight: '340px', overflowY: 'auto', paddingRight: '5px', marginBottom: '15px' }}>
                     {SERVICES_CATEGORIES.map((cat, idx) => (
                       <div key={idx} style={{ marginBottom: '14px' }}>
@@ -522,7 +566,6 @@ function CustomerPage() {
                     ))}
                   </div>
 
-                  {/* สรุปบริการที่เลือก */}
                   <div style={{ background: '#f7fafc', padding: '12px', borderRadius: '10px', border: '1px solid #e2e8f0', marginBottom: '15px' }}>
                     <div style={{ fontSize: '12px', color: '#718096', marginBottom: '4px' }}>
                       📋 <strong>บริการที่เลือก ({selectedServices.length} รายการ):</strong> {combinedServiceName}
@@ -589,39 +632,52 @@ function CustomerPage() {
         </div>
       )}
 
-      {/* 🎟️ Modal บัตรคิว Ticket */}
+      {/* 🎟️ Modal บัตรคิว Ticket (แสดงเพียง 1 ใบพร้อมบันทึกลงอัลบั้มภาพ) */}
       {showTicketModal && ticketData && (
         <div style={modalOverlayStyle}>
-          <div style={{ ...modalContentStyle, maxWidth: '360px', background: '#fff', borderTop: '8px solid #004a99', padding: '30px 25px' }}>
-            <div style={{ fontSize: '32px', marginBottom: '5px' }}>💈</div>
-            <h2 style={{ margin: '0 0 2px 0', color: '#002d5a', fontSize: '22px' }}>BARBER CLASSIC</h2>
-            <p style={{ margin: 0, fontSize: '13px', color: '#718096', fontWeight: 'bold' }}>{ticketData.shopName}</p>
-            <span style={{ fontSize: '12px', color: '#a0aec0' }}>บัตรคิวบริการตัดผม</span>
+          <div style={{ ...modalContentStyle, maxWidth: '360px', background: '#fff', borderTop: '8px solid #004a99', padding: '25px' }}>
+            
+            {/* กล่องเนื้อหาบัตรคิวเฉพาะส่วนที่จะแปลงเป็นรูปภาพ */}
+            <div ref={ticketRef} style={{ width: '100%', background: '#fff', padding: '15px', borderRadius: '12px', textAlign: 'center' }}>
+              <div style={{ fontSize: '32px', marginBottom: '5px' }}>💈</div>
+              <h2 style={{ margin: '0 0 2px 0', color: '#002d5a', fontSize: '20px' }}>BARBER CLASSIC</h2>
+              <p style={{ margin: 0, fontSize: '13px', color: '#718096', fontWeight: 'bold' }}>{ticketData.shopName}</p>
+              <span style={{ fontSize: '12px', color: '#a0aec0' }}>บัตรคิวบริการตัดผม</span>
 
-            <div style={{ background: '#ebf8ff', padding: '12px', borderRadius: '12px', margin: '15px 0', width: '100%', boxSizing: 'border-box' }}>
-              <span style={{ fontSize: '12px', color: '#2b6cb0', fontWeight: 'bold' }}>หมายเลขคิวของคุณ</span>
-              <h1 style={{ margin: '4px 0 0 0', color: '#004a99', fontSize: '36px' }}>#{ticketData.queueNo}</h1>
-            </div>
+              <div style={{ background: '#ebf8ff', padding: '12px', borderRadius: '12px', margin: '15px 0', width: '100%', boxSizing: 'border-box' }}>
+                <span style={{ fontSize: '12px', color: '#2b6cb0', fontWeight: 'bold' }}>หมายเลขคิวของคุณ</span>
+                <h1 style={{ margin: '4px 0 0 0', color: '#004a99', fontSize: '36px' }}>#{ticketData.queueNo}</h1>
+              </div>
 
-            <div style={{ textAlign: 'left', width: '100%', fontSize: '13px', lineHeight: '2', color: '#4a5568' }}>
-              <div>👤 <strong>ลูกค้า:</strong> {ticketData.customerName}</div>
-              <div>📞 <strong>เบอร์โทร:</strong> {ticketData.phone}</div>
-              <div>✂️ <strong>ช่างผู้ให้บริการ:</strong> {ticketData.barberName}</div>
-              <div>💈 <strong>บริการ:</strong> {ticketData.service}</div>
-              <div>⏱️ <strong>เวลาโดยประมาณ:</strong> ~{ticketData.totalDuration} นาที</div>
-              <div>📅 <strong>เวลาจอง:</strong> {new Date(ticketData.date).toLocaleString('th-TH')}</div>
-              <div>💰 <strong>ยอดชำระรวม:</strong> <span style={{ color: '#004a99', fontWeight: 'bold', fontSize: '16px' }}>{ticketData.price} บาท</span></div>
+              <div style={{ textAlign: 'left', width: '100%', fontSize: '13px', lineHeight: '1.9', color: '#4a5568' }}>
+                <div>👤 <strong>ลูกค้า:</strong> {ticketData.customerName}</div>
+                <div>📞 <strong>เบอร์โทร:</strong> {ticketData.phone}</div>
+                <div>✂️ <strong>ช่างผู้ให้บริการ:</strong> {ticketData.barberName}</div>
+                <div>💈 <strong>บริการ:</strong> {ticketData.service}</div>
+                <div>⏱️ <strong>เวลาโดยประมาณ:</strong> ~{ticketData.totalDuration} นาที</div>
+                <div>📅 <strong>เวลาจอง:</strong> {new Date(ticketData.date).toLocaleString('th-TH')}</div>
+                <div>💰 <strong>ยอดชำระรวม:</strong> <span style={{ color: '#004a99', fontWeight: 'bold', fontSize: '15px' }}>{ticketData.price} บาท</span></div>
+              </div>
             </div>
 
             <hr style={{ width: '100%', borderTop: '1px dashed #cbd5e0', margin: '15px 0' }} />
             
-            <button onClick={() => window.print()} style={{ ...confirmButtonStyle, backgroundColor: '#38a169', margin: '0 0 10px 0' }}>🖨️ พิมพ์บัตรคิว / แคปหน้าจอ</button>
-            <button onClick={() => setShowTicketModal(false)} style={{ ...cancelButtonStyle, margin: 0 }}>ปิดหน้าต่าง</button>
+            {/* ปุ่มบันทึกลงคลังภาพ / ดาวน์โหลด */}
+            <button 
+              onClick={handleSaveTicketImage} 
+              disabled={isSavingImage}
+              style={{ ...confirmButtonStyle, backgroundColor: '#38a169', margin: '0 0 10px 0', width: '100%' }}
+            >
+              {isSavingImage ? '⏳ กำลังบันทึกรูป...' : '💾 บันทึกรูปลงคลังภาพ / เครื่อง'}
+            </button>
+            <button onClick={() => setShowTicketModal(false)} style={{ ...cancelButtonStyle, margin: 0, width: '100%' }}>
+              ปิดหน้าต่าง
+            </button>
           </div>
         </div>
       )}
 
-      {/* 💳 Modal สแกน QR ชำระเงิน PromptPay (เด้งขึ้นมาก่อนหลังตัดผมเสร็จ) */}
+      {/* 💳 Modal สแกน QR ชำระเงิน PromptPay */}
       {showPaymentModal && currentPayingBooking && (
         <div style={modalOverlayStyle}>
           <div style={{ ...modalContentStyle, maxWidth: '360px', padding: '30px 25px', textAlign: 'center' }}>
@@ -659,7 +715,7 @@ function CustomerPage() {
         </div>
       )}
 
-      {/* ⭐ Modal ประเมินความพึงพอใจ (เด้งขึ้นมาหลังจ่ายเงินเสร็จ) */}
+      {/* ⭐ Modal ประเมินความพึงพอใจ */}
       {showReviewModal && (
         <div style={modalOverlayStyle}>
           <div style={{ ...modalContentStyle, maxWidth: '360px', padding: '30px 25px' }}>
