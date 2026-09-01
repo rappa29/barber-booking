@@ -49,11 +49,20 @@ const SERVICES_CATEGORIES = [
   }
 ];
 
+// ⏰ สล็อตเวลาทำการ 10:30 - 20:30 น. (สล็อตละ 30 นาที)
+const TIME_SLOTS = [
+  '10:30', '11:00', '11:30',
+  '12:00', '12:30', '13:00', '13:30',
+  '14:00', '14:30', '15:00', '15:30',
+  '16:00', '16:30', '17:00', '17:30',
+  '18:00', '18:30', '19:00', '19:30', '20:00'
+];
+
 function CustomerPage() {
   const [name, setName] = useState(localStorage.getItem('barberCustomerName') || '');
   const [phone, setPhone] = useState(localStorage.getItem('barberPhone') || '');
-  const [date, setDate] = useState('');
   const [selectedDate, setSelectedDate] = useState(new Date());
+  const [selectedTimeSlot, setSelectedTimeSlot] = useState(''); // ⏰ สล็อตเวลาที่ลูกค้าเลือก
   
   const [selectedServices, setSelectedServices] = useState([SERVICES_CATEGORIES[0].items[0]]);
   const [myPhone, setMyPhone] = useState(localStorage.getItem('barberPhone') || '');
@@ -109,7 +118,7 @@ function CustomerPage() {
     setShowAlert(true);
   };
 
-  // 📅 ฟังก์ชันสกัดสตริง YYYY-MM-DD แบบแม่นยำ ป้องกัน Timezone เลื่อนวัน
+  // 📅 ฟังก์ชันแปลง Date เป็นสตริง YYYY-MM-DD
   const formatLocalDate = (d) => {
     if (!d) return '';
     if (typeof d === 'string' && d.includes('-')) {
@@ -122,16 +131,12 @@ function CustomerPage() {
     return `${year}-${month}-${day}`;
   };
 
-  // 📅 ดึงข้อมูลจำนวนคิวทั้งหมดเพื่อไปแสดงวงกลมสีแดงบนปฏิทิน
+  // 📅 ดึงข้อมูลจำนวนคิวเพื่อวาดจุดแดงบนปฏิทิน
   const fetchAllCalendarBookings = async () => {
     let query = supabase.from('bookings').select('booking_date, status, shop_id, barber_id');
     
-    if (selectedShop) {
-      query = query.eq('shop_id', selectedShop.id);
-    }
-    if (selectedBarberId) {
-      query = query.eq('barber_id', selectedBarberId);
-    }
+    if (selectedShop) query = query.eq('shop_id', selectedShop.id);
+    if (selectedBarberId) query = query.eq('barber_id', selectedBarberId);
 
     const { data, error } = await query;
     if (!error && data) {
@@ -149,6 +154,11 @@ function CustomerPage() {
   useEffect(() => {
     fetchAllCalendarBookings();
   }, [selectedShop, selectedBarberId, bookings]);
+
+  // เมื่อเปลี่ยนวันที่ ให้รีเซ็ตเวลาที่เลือกไว้
+  useEffect(() => {
+    setSelectedTimeSlot('');
+  }, [selectedDate, selectedBarberId]);
 
   const handleLogoutCustomer = () => {
     localStorage.removeItem('barberPhone');
@@ -310,9 +320,47 @@ function CustomerPage() {
   const totalDuration = selectedServices.reduce((sum, item) => sum + item.duration, 0);
   const combinedServiceName = selectedServices.map(item => item.name).join(' + ');
 
+  // 🔒 ฟังก์ชันตรวจสอบว่าสล็อตเวลานั้นไม่ว่าง หรือผ่านเวลาไปแล้ว
+  const isTimeSlotBooked = (slotTime) => {
+    const selectedDateStr = formatLocalDate(selectedDate);
+    const now = new Date();
+    const todayStr = formatLocalDate(now);
+
+    // 1. ถ้าเป็นวันที่ของวันนี้ และเวลาผ่านไปแล้ว ให้ปิดการจอง
+    if (selectedDateStr === todayStr) {
+      const [slotHours, slotMinutes] = slotTime.split(':').map(Number);
+      const slotDate = new Date();
+      slotDate.setHours(slotHours, slotMinutes, 0, 0);
+      if (slotDate < now) {
+        return { booked: true, reason: 'เวลาผ่านไปแล้ว' };
+      }
+    }
+
+    // 2. ตรวจสอบการจองซ้ำของช่างในวันและเวลานั้น
+    const isConflict = filteredBookings.some((b) => {
+      if (!b.booking_date || b.status === 'completed') return false;
+      const bDate = formatLocalDate(b.booking_date);
+      if (bDate !== selectedDateStr) return false;
+
+      // สกัดเวลา เช่น "2026-09-27T11:00:00" -> "11:00"
+      const bTime = b.booking_date.includes('T') 
+        ? b.booking_date.split('T')[1].substring(0, 5) 
+        : b.booking_date.substring(11, 16);
+
+      return bTime === slotTime;
+    });
+
+    return { booked: isConflict, reason: isConflict ? 'คิวเต็มแล้ว' : '' };
+  };
+
   const handleBooking = async () => {
-    if (!name || !phone || !date || !selectedShop || !selectedBarberId) {
-      triggerAlert("❌ ข้อมูลไม่ครบถ้วน! กรุณากรอกชื่อ เบอร์โทร วันเวลา และ 'คลิกเลือกพนักงานช่าง' บนการ์ดให้เรียบร้อยก่อนยืนยันการจองครับ");
+    if (!name || !phone || !selectedShop || !selectedBarberId) {
+      triggerAlert("❌ ข้อมูลไม่ครบถ้วน! กรุณากรอกชื่อ เบอร์โทร และ 'คลิกเลือกพนักงานช่าง' บนการ์ดให้เรียบร้อยก่อนยืนยันการจองครับ");
+      return;
+    }
+
+    if (!selectedTimeSlot) {
+      triggerAlert("⏰ กรุณาคลิกเลือก 'รอบเวลาบริการ (10:30 - 20:30 น.)' ที่ต้องการจองครับ");
       return;
     }
 
@@ -321,13 +369,15 @@ function CustomerPage() {
       return;
     }
 
+    // ประกอบวันและเวลา เช่น "2026-09-27T14:30:00"
+    const finalBookingDateTime = `${formatLocalDate(selectedDate)}T${selectedTimeSlot}:00`;
     const chosenBarber = barbers.find(b => b.id === selectedBarberId);
     
     const { error } = await supabase.from('bookings').insert([
       { 
         name: name, 
         phone: phone, 
-        booking_date: date, 
+        booking_date: finalBookingDateTime, 
         status: 'waiting',
         shop_id: selectedShop.id,       
         barber_id: selectedBarberId,
@@ -350,11 +400,11 @@ function CustomerPage() {
         service: combinedServiceName,
         price: totalPrice,
         totalDuration: totalDuration,
-        date: date
+        date: finalBookingDateTime
       });
       setShowTicketModal(true);
 
-      setDate('');
+      setSelectedTimeSlot('');
       fetchAllCalendarBookings();
     } else {
       triggerAlert(`❌ จองไม่สำเร็จ: ${error.message}`);
@@ -443,19 +493,13 @@ function CustomerPage() {
     return { text: '🟢 วันนี้ยังไม่มีคิวตัดผม สามารถจองเป็นคิวแรกได้เลยครับ', isReady: false };
   };
 
-  // 🔴 ฟังก์ชันวาดวงกลมสีแดงแสดงจำนวนคิวลงบนช่องวันในปฏิทิน
   const renderCalendarTileContent = ({ date: tileDate, view }) => {
     if (view === 'month') {
       const dStr = formatLocalDate(tileDate);
       const count = allBookingsCount[dStr];
       if (count && count > 0) {
         return (
-          <div style={{
-            display: 'flex',
-            justifyContent: 'center',
-            alignItems: 'center',
-            marginTop: '2px'
-          }}>
+          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', marginTop: '2px' }}>
             <div style={{
               backgroundColor: '#e53e3e',
               color: 'white',
@@ -543,6 +587,7 @@ function CustomerPage() {
               <thead style={{background: '#004a99', color: 'white'}}>
                 <tr>
                   <th style={thStyle}>ลำดับ</th>
+                  <th style={thStyle}>เวลา</th>
                   <th style={thStyle}>ลูกค้า</th>
                   <th style={thStyle}>บริการที่เลือก</th>
                   <th style={thStyle}>ราคารวม</th>
@@ -552,25 +597,32 @@ function CustomerPage() {
               </thead>
               <tbody>
                 {filteredBookings.length === 0 ? (
-                  <tr><td colSpan={6} style={{textAlign:'center', padding:'20px', color:'#999'}}>วันนี้ยังไม่มีการจองคิว</td></tr>
+                  <tr><td colSpan={7} style={{textAlign:'center', padding:'20px', color:'#999'}}>วันนี้ยังไม่มีการจองคิว</td></tr>
                 ) : (
-                  filteredBookings.map((b, index) => (
-                    <tr key={b.id} style={{ borderBottom: '1px solid #eee' }}>
-                      <td style={tdStyle}>{index + 1}</td>
-                      <td style={tdStyle}>{b.name}</td>
-                      <td style={{ ...tdStyle, fontSize: '13px', textAlign: 'left', maxWidth: '280px' }}>{b.service || 'ตัดผมวินเทจ'}</td>
-                      <td style={{ ...tdStyle, color: '#004a99', fontWeight: 'bold' }}>{b.price || 250} ฿</td>
-                      <td style={{...tdStyle, color: b.status === 'in_progress' ? 'red' : b.status === 'completed' ? 'green' : '#666'}}>
-                        <strong>{b.status === 'in_progress' ? 'กำลังตัดผม...' : b.status === 'completed' ? 'เสร็จแล้ว' : 'รอคิว'}</strong>
-                      </td>
-                      <td style={tdStyle}>
-                        <button onClick={() => updateQueueStatus(b.id, b.status)} style={{...actionBtnStyle, background: b.status === 'in_progress' ? '#4caf50' : '#ff9800'}}>
-                          {b.status === 'waiting' || !b.status ? 'เรียกเข้าตัด' : b.status === 'in_progress' ? 'ตัดเสร็จแล้ว' : 'ทำซ้ำ'}
-                        </button>
-                        <button onClick={() => { setTargetDeleteConfirmId(b.id); setShowDeleteConfirm(true); }} style={{...actionBtnStyle, background: '#f44336', marginLeft: '5px'}}>ลบ</button>
-                      </td>
-                    </tr>
-                  ))
+                  filteredBookings.map((b, index) => {
+                    const bookingTimeStr = b.booking_date && b.booking_date.includes('T') 
+                      ? b.booking_date.split('T')[1].substring(0, 5) 
+                      : (b.booking_date ? b.booking_date.substring(11, 16) : '-');
+
+                    return (
+                      <tr key={b.id} style={{ borderBottom: '1px solid #eee' }}>
+                        <td style={tdStyle}>{index + 1}</td>
+                        <td style={{ ...tdStyle, fontWeight: 'bold', color: '#004a99' }}>⏰ {bookingTimeStr} น.</td>
+                        <td style={tdStyle}>{b.name}</td>
+                        <td style={{ ...tdStyle, fontSize: '13px', textAlign: 'left', maxWidth: '250px' }}>{b.service || 'ตัดผมวินเทจ'}</td>
+                        <td style={{ ...tdStyle, color: '#004a99', fontWeight: 'bold' }}>{b.price || 250} ฿</td>
+                        <td style={{...tdStyle, color: b.status === 'in_progress' ? 'red' : b.status === 'completed' ? 'green' : '#666'}}>
+                          <strong>{b.status === 'in_progress' ? 'กำลังตัดผม...' : b.status === 'completed' ? 'เสร็จแล้ว' : 'รอคิว'}</strong>
+                        </td>
+                        <td style={tdStyle}>
+                          <button onClick={() => updateQueueStatus(b.id, b.status)} style={{...actionBtnStyle, background: b.status === 'in_progress' ? '#4caf50' : '#ff9800'}}>
+                            {b.status === 'waiting' || !b.status ? 'เรียกเข้าตัด' : b.status === 'in_progress' ? 'ตัดเสร็จแล้ว' : 'ทำซ้ำ'}
+                          </button>
+                          <button onClick={() => { setTargetDeleteConfirmId(b.id); setShowDeleteConfirm(true); }} style={{...actionBtnStyle, background: '#f44336', marginLeft: '5px'}}>ลบ</button>
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>
@@ -599,7 +651,7 @@ function CustomerPage() {
               
               <div style={{ background: '#004a99', color: 'white', padding: '20px', borderRadius: '15px', marginBottom: '25px' }}>
                 <h2 style={{ margin: 0 }}>🏪 {selectedShop.name}</h2>
-                <p style={{ margin: '5px 0 0 0', opacity: 0.9 }}>รายชื่อพนักงานและคิวบริการประจำสาขา</p>
+                <p style={{ margin: '5px 0 0 0', opacity: 0.9 }}>เวลาเปิดให้บริการ: 10:30 - 20:30 น. (ทุกวัน)</p>
               </div>
 
               <div style={mainLayout}>
@@ -655,11 +707,11 @@ function CustomerPage() {
                   </div>
                 </div>
 
-                {/* 2. ฟอร์มเลือกบริการ */}
+                {/* 2. ฟอร์มเลือกบริการ + ปฏิทิน + สล็อตเวลา */}
                 <div style={{ ...sectionStyle, flex: 1.6 }}>
                   <h3 style={sectionTitle}>✂️ 2. เลือกทรงผมและบริการเสริม</h3>
                   
-                  <div style={{ maxHeight: '340px', overflowY: 'auto', paddingRight: '5px', marginBottom: '15px' }}>
+                  <div style={{ maxHeight: '280px', overflowY: 'auto', paddingRight: '5px', marginBottom: '15px' }}>
                     {SERVICES_CATEGORIES.map((cat, idx) => (
                       <div key={idx} style={{ marginBottom: '14px' }}>
                         <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#004a99', background: '#edf2f7', padding: '6px 10px', borderRadius: '6px', marginBottom: '8px' }}>
@@ -710,13 +762,55 @@ function CustomerPage() {
                     </div>
                   </div>
 
-                  <h3 style={{ ...sectionTitle, marginTop: '5px' }}>📅 3. วันเวลาและข้อมูลลูกค้า</h3>
+                  <h3 style={{ ...sectionTitle, marginTop: '5px' }}>📅 3. เลือกวันที่และรอบเวลาบริการ (10:30 - 20:30 น.)</h3>
                   <div style={{ marginBottom: '15px' }}>
                     <Calendar 
                       onChange={setSelectedDate} 
                       value={selectedDate} 
                       tileContent={renderCalendarTileContent}
                     />
+                  </div>
+
+                  {/* ⏰ ส่วนแสดงสล็อตเวลา (Time Slots) */}
+                  <div style={{ marginBottom: '18px' }}>
+                    <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#002d5a', marginBottom: '8px' }}>
+                      ⏰ เลือกรอบเวลาวันที่ {selectedDate.toLocaleDateString('th-TH')}:
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(85px, 1fr))', gap: '8px' }}>
+                      {TIME_SLOTS.map((slot) => {
+                        const status = isTimeSlotBooked(slot);
+                        const isSelected = selectedTimeSlot === slot;
+
+                        return (
+                          <button
+                            key={slot}
+                            disabled={status.booked}
+                            onClick={() => setSelectedTimeSlot(slot)}
+                            style={{
+                              padding: '10px 4px',
+                              borderRadius: '8px',
+                              border: isSelected ? '2px solid #004a99' : '1px solid #e2e8f0',
+                              backgroundColor: status.booked ? '#edf2f7' : (isSelected ? '#004a99' : '#fff'),
+                              color: status.booked ? '#a0aec0' : (isSelected ? '#fff' : '#2d3748'),
+                              cursor: status.booked ? 'not-allowed' : 'pointer',
+                              fontWeight: 'bold',
+                              fontSize: '12px',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              transition: 'all 0.2s',
+                              boxShadow: isSelected ? '0 3px 8px rgba(0,74,153,0.3)' : 'none'
+                            }}
+                          >
+                            <span>{slot} น.</span>
+                            <span style={{ fontSize: '9px', marginTop: '2px', fontWeight: 'normal', color: status.booked ? '#e53e3e' : (isSelected ? '#bee3f8' : '#718096') }}>
+                              {status.booked ? status.reason : (isSelected ? '✓ เลือกแล้ว' : 'ว่าง')}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
 
                   <input 
@@ -731,15 +825,9 @@ function CustomerPage() {
                     onChange={e => setPhone(e.target.value)} 
                     style={{...inputStyle, marginTop: '10px'}} 
                   />
-                  <input 
-                    type="datetime-local" 
-                    value={date} 
-                    onChange={e => setDate(e.target.value)} 
-                    style={{...inputStyle, marginTop: '10px'}} 
-                  />
                   
                   <button onClick={handleBooking} style={buttonStyle}>
-                    ยืนยันการจองคิว ({totalPrice} ฿)
+                    ยืนยันการจองคิว {selectedTimeSlot ? `รอบ ${selectedTimeSlot} น.` : ''} ({totalPrice} ฿)
                   </button>
                 </div>
               </div>
@@ -751,6 +839,7 @@ function CustomerPage() {
                   <thead style={{background: '#004a99', color: 'white'}}>
                     <tr>
                       <th style={thStyle}>ลำดับ</th>
+                      <th style={thStyle}>เวลา</th>
                       <th style={thStyle}>ลูกค้า</th>
                       <th style={thStyle}>บริการที่จอง</th>
                       <th style={thStyle}>ราคารวม</th>
@@ -759,23 +848,30 @@ function CustomerPage() {
                   </thead>
                   <tbody>
                     {filteredBookings.length === 0 ? (
-                      <tr><td colSpan={5} style={{textAlign:'center', padding:'20px', color:'#999'}}>วันนี้ยังไม่มีการจองคิว</td></tr>
+                      <tr><td colSpan={6} style={{textAlign:'center', padding:'20px', color:'#999'}}>วันนี้ยังไม่มีการจองคิว</td></tr>
                     ) : (
-                      filteredBookings.map((b, index) => (
-                        <tr key={b.id} style={{ 
-                          background: b.phone === myPhone ? '#e3f2fd' : 'white', 
-                          borderBottom: '1px solid #eee' 
-                        }}
-                        >
-                          <td style={tdStyle}>{index + 1}</td>
-                          <td style={tdStyle}>{b.name} {b.phone === myPhone && <small style={{ color: '#004a99', fontWeight: 'bold' }}>(คิวของคุณ)</small>}</td>
-                          <td style={{ ...tdStyle, fontSize: '12px', textAlign: 'left', maxWidth: '300px' }}>{b.service || 'ตัดผมวินเทจ / แฟชั่น'}</td>
-                          <td style={{ ...tdStyle, color: '#004a99', fontWeight: 'bold' }}>{b.price || 250} ฿</td>
-                          <td style={{...tdStyle, color: b.status === 'in_progress' ? 'red' : b.status === 'completed' ? 'green' : '#666'}}>
-                            <strong>{b.status === 'in_progress' ? 'กำลังตัดผม...' : b.status === 'completed' ? 'เสร็จแล้ว' : 'รอคิว'}</strong>
-                          </td>
-                        </tr>
-                      ))
+                      filteredBookings.map((b, index) => {
+                        const bookingTimeStr = b.booking_date && b.booking_date.includes('T') 
+                          ? b.booking_date.split('T')[1].substring(0, 5) 
+                          : (b.booking_date ? b.booking_date.substring(11, 16) : '-');
+
+                        return (
+                          <tr key={b.id} style={{ 
+                            background: b.phone === myPhone ? '#e3f2fd' : 'white', 
+                            borderBottom: '1px solid #eee' 
+                          }}
+                          >
+                            <td style={tdStyle}>{index + 1}</td>
+                            <td style={{ ...tdStyle, fontWeight: 'bold', color: '#004a99' }}>⏰ {bookingTimeStr} น.</td>
+                            <td style={tdStyle}>{b.name} {b.phone === myPhone && <small style={{ color: '#004a99', fontWeight: 'bold' }}>(คิวของคุณ)</small>}</td>
+                            <td style={{ ...tdStyle, fontSize: '12px', textAlign: 'left', maxWidth: '280px' }}>{b.service || 'ตัดผมวินเทจ / แฟชั่น'}</td>
+                            <td style={{ ...tdStyle, color: '#004a99', fontWeight: 'bold' }}>{b.price || 250} ฿</td>
+                            <td style={{...tdStyle, color: b.status === 'in_progress' ? 'red' : b.status === 'completed' ? 'green' : '#666'}}>
+                              <strong>{b.status === 'in_progress' ? 'กำลังตัดผม...' : b.status === 'completed' ? 'เสร็จแล้ว' : 'รอคิว'}</strong>
+                            </td>
+                          </tr>
+                        );
+                      })
                     )}
                   </tbody>
                 </table>
@@ -1008,7 +1104,7 @@ const mainLayout = { display: 'flex', gap: '20px', flexWrap: 'wrap', justifyCont
 const sectionStyle = { background: 'white', padding: '20px', borderRadius: '15px', boxShadow: '0 5px 15px rgba(0,0,0,0.05)', minWidth: '320px', display: 'flex', flexDirection: 'column' };
 const sectionTitle = { color: '#004a99', borderBottom: '2px solid #eee', paddingBottom: '10px', marginTop: 0, marginBottom: '15px', fontSize: '15px' };
 const inputStyle = { width: '100%', padding: '12px', borderRadius: '8px', border: '1px solid #ddd', boxSizing: 'border-box' };
-const buttonStyle = { width: '100%', padding: '12px', background: '#004a99', color: 'white', border: 'none', borderRadius: '8px', marginTop: '15px', fontWeight: 'bold', cursor: 'pointer' };
+const buttonStyle = { width: '100%', padding: '14px', background: '#004a99', color: 'white', border: 'none', borderRadius: '8px', marginTop: '15px', fontWeight: 'bold', fontSize: '15px', cursor: 'pointer' };
 const tableContainer = { width: '100%', marginTop: '40px' };
 const tableStyle = { width: '100%', borderCollapse: 'collapse', background: 'white', borderRadius: '10px', overflow: 'hidden' };
 const thStyle = { padding: '15px' };
